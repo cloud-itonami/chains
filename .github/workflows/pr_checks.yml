@@ -3,60 +3,45 @@ name: Run PR Checks
 on:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   validate_icons:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
       with:
-        fetch-depth: 0
-
-    - uses: nrwl/nx-set-shas@v3
-      id: last_successful_commit_push
-      with:
-        main-branch-name: master
-        workflow-id: 'pr_checks.yml'
+        fetch-depth: 2
+        persist-credentials: false
 
     - name: Get changed icons
-      id: changed-icons
-      uses: tj-actions/changed-files@v41
-      with:
-        files: _data/icons/*.json
-        base_sha: ${{ steps.last_successful_commit_push.outputs.base }}
-    
-    - name: Get changed icon blobs
-      id: changed-icon-blobs
-      uses: tj-actions/changed-files@v41
-      with:
-        files: _data/iconsDownload/*
-        base_sha: ${{ steps.last_successful_commit_push.outputs.base }}
+      run: |
+        git diff --name-only --diff-filter=ACMRT -z HEAD^1 HEAD -- '_data/icons/*.json' > "$RUNNER_TEMP/changed-icons"
 
     - run: sudo apt-get -y install jq curl exiftool
 
     - name: Verify the changed icons
-      if: steps.changed-icons.outputs.any_changed == 'true'
+      shell: bash
       run: |
         set -euo pipefail
 
         BAD=0
 
-        CHANGED_ICON_BLOBS=(${{ steps.changed-icon-blobs.outputs.all_changed_files }})
-
-        for CHANGED_FILE in ${{ steps.changed-icons.outputs.all_changed_files }}; do
+        while IFS= read -r -d '' CHANGED_FILE; do
           echo "Checking icon $CHANGED_FILE"
-          URL=$(cat "$CHANGED_FILE" | jq '.[0].url' -r)
+          URL=$(jq -r '.[0].url' "$CHANGED_FILE")
           if [[ "$URL" =~ ^ipfs://([A-Za-z0-9]+)$ ]]; then
             IPFS_HASH=${BASH_REMATCH[1]}
 
-            if [[ "${CHANGED_ICON_BLOBS[*]} " =~ "_data/iconsDownload/$IPFS_HASH " ]]; then
-              TARGET_FILE="_data/iconsDownload/$IPFS_HASH"
-            else
+            TARGET_FILE="_data/iconsDownload/$IPFS_HASH"
+            if [[ ! -f "$TARGET_FILE" ]]; then
               echo "Trying to download the image..."
-              TARGET_FILE=icon
-              curl -Lo icon "https://cloudflare-ipfs.com/ipfs/$IPFS_HASH" 2>/dev/null
+              TARGET_FILE="$RUNNER_TEMP/icon"
+              curl --fail --silent --show-error --location --output "$TARGET_FILE" "https://cloudflare-ipfs.com/ipfs/$IPFS_HASH"
             fi
 
-            METADATA=$(exiftool $TARGET_FILE -json)
+            METADATA=$(exiftool "$TARGET_FILE" -json)
             
             SCHEMA_WIDTH=$(cat "$CHANGED_FILE" | jq '.[0].width' -r)
             SCHEMA_HEIGHT=$(cat "$CHANGED_FILE" | jq '.[0].height' -r)
@@ -103,39 +88,21 @@ jobs:
             echo "Expected an IPFS URL, got $URL"
             BAD=1
           fi
-        done
+        done < "$RUNNER_TEMP/changed-icons"
         exit $BAD
 
   validate_formatting:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
       with:
-        fetch-depth: 0
+        fetch-depth: 2
+        persist-credentials: false
 
-    - uses: nrwl/nx-set-shas@v3
-      id: last_successful_commit_push
-      with:
-        main-branch-name: master
-        workflow-id: 'pr_checks.yml'
-
-    - name: Get changed files
-      id: changed-files
-      uses: tj-actions/changed-files@v41
-      with:
-        files: _data/*/*.json
-        base_sha: ${{ steps.last_successful_commit_push.outputs.base }}
-
-    - run: sudo npm i -g prettier
-
-    - name: Verify the changed icons
-      if: steps.changed-files.outputs.any_changed == 'true'
+    - name: Verify formatting of changed JSON files
+      shell: bash
       run: |
-        set -euo pipefail
-
-        BAD=0
-
-        for CHANGED_FILE in ${{ steps.changed-files.outputs.all_changed_files }}; do
-          echo "Checking $CHANGED_FILE"
-          diff -u "$CHANGED_FILE" <(prettier "$CHANGED_FILE")
-        done
+        git diff --name-only --diff-filter=ACMRT -z HEAD^1 HEAD -- '_data/*/*.json' > "$RUNNER_TEMP/changed-json"
+        if [[ -s "$RUNNER_TEMP/changed-json" ]]; then
+          xargs -0 npx --yes prettier@3.10.1 --check -- < "$RUNNER_TEMP/changed-json"
+        fi

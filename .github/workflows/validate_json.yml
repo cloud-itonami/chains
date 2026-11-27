@@ -2,15 +2,21 @@ name: Check JSON Schema
 
 on:
   push:
+    branches: ['**']
   pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   validate_json:
     runs-on: ubuntu-latest
     steps:
     - name: Check out repo
-      uses: actions/checkout@v2
-    - uses: actions/cache@v2
+      uses: actions/checkout@v4
+      with:
+        persist-credentials: false
+    - uses: actions/cache@v4
       name: Configure npm caching
       with:
         path: ~/.npm
@@ -20,5 +26,5 @@ jobs:
     - name: Run JSON Validation
       working-directory: ./tools
       run: |-
-        npm install
+        npm ci
         node schemaCheck.js
