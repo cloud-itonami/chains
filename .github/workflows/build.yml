@@ -1,25 +1,95 @@
 name: Build
-on: [pull_request]
+on:
+  pull_request:
+  push:
+    branches: [master]
+  workflow_call:
+
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2.3.1
+        uses: actions/checkout@v4
         with:
-          submodules: recursive
+          fetch-depth: 2
+          persist-credentials: false
 
-      - name: Get changed files
-        id: changed-files
-        uses: tj-actions/changed-files@v41
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
 
       - name: Check changed files
+        if: github.event_name == 'pull_request'
+        shell: bash
         run: |
-          for file in ${{ steps.changed-files.outputs.all_changed_files }}; do
-            ./gradlew clean run --args="verbose singleChainCheck $file"
-          done
+          git diff --name-only --diff-filter=ACMRT -z HEAD^1 HEAD -- '_data/chains/eip155-*.json' > "$RUNNER_TEMP/changed-chains"
+          while IFS= read -r -d '' file; do
+            if [[ ! "$file" =~ ^_data/chains/eip155--?[0-9]+\.json$ ]]; then
+              printf 'Invalid chain filename: %s\n' "$file" >&2
+              exit 1
+            fi
+            ./gradlew run --args="verbose singleChainCheck $file"
+          done < "$RUNNER_TEMP/changed-chains"
 
-      - name: Build
+      - name: Test, build, and generate the registry
+        run: ./gradlew build run
+
+      - name: Archive registry
         run: |
-          ./gradlew run
+          tar -C output -czf "$RUNNER_TEMP/registry.tar.gz" .
+
+      - name: Upload registry for verification
+        uses: actions/upload-artifact@v4
+        with:
+          name: registry
+          path: ${{ runner.temp }}/registry.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  website:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GATSBY_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: website/.nvmrc
+
+      - name: Build the website
+        working-directory: website
+        run: |
+          node .yarn/releases/yarn-3.4.1.cjs install --immutable
+          node .yarn/releases/yarn-3.4.1.cjs build
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: registry
+          path: ${{ runner.temp }}
+
+      - name: Archive the combined static site
+        run: |
+          tar -xzf "$RUNNER_TEMP/registry.tar.gz" -C website/public
+          tar -C website/public -czf "$RUNNER_TEMP/website.tar.gz" .
+
+      - name: Upload website for verification
+        uses: actions/upload-artifact@v4
+        with:
+          name: website
+          path: ${{ runner.temp }}/website.tar.gz
+          if-no-files-found: error
+          retention-days: 7
 

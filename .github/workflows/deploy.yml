@@ -1,37 +1,52 @@
-name: Build
+name: Publish gh-pages
+
 on:
-  push:
-    branches: [ master ]
+  workflow_dispatch:
+    inputs:
+      confirm_publish:
+        description: Publish the site built from master to gh-pages
+        type: boolean
+        required: true
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: publish-gh-pages
+  cancel-in-progress: false
+
 jobs:
+  prepare:
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'cloud-itonami/chains' && github.ref == 'refs/heads/master' && inputs.confirm_publish
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build.yml
+
   deploy:
+    needs: prepare
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'cloud-itonami/chains' && github.ref == 'refs/heads/master' && inputs.confirm_publish
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: Checkout	
-        uses: actions/checkout@v2.3.1
+      - uses: actions/checkout@v4
         with:
-          submodules: recursive
-      - name: Build
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: website
+          path: ${{ runner.temp }}
+
+      - name: Extract the site from this run
         run: |
-          ./gradlew run
-      - name: Set Node.js 18.x
-        uses: actions/setup-node@v3
-        with:
-          node-version: 18.x
-      - name: Run yarn install
-        uses: borales/actions-yarn@v4
-        with:
-         dir: 'website'
-         cmd: install # will run `yarn install` command
-      - name: Run yarn build
-        uses: borales/actions-yarn@v4
-        with:
-          dir: 'website'
-          cmd: run build # will run `yarn test` command     
-      - name: Merge
-        run: |
-          cp -a output/. website/public/
-      - name: Deploy
-        uses: JamesIves/github-pages-deploy-action@4.1.4
+          mkdir -p site-to-publish
+          tar -xzf "$RUNNER_TEMP/website.tar.gz" -C site-to-publish
+          test -f site-to-publish/.nojekyll
+          test -f site-to-publish/index.html
+
+      - name: Publish the static site
+        uses: JamesIves/github-pages-deploy-action@fa24774553152dd7873cd16ebd8d959b010c5445 # v4.9.0
         with:
           branch: gh-pages
-          folder: website/public
+          folder: site-to-publish

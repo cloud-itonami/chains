@@ -16,7 +16,7 @@
   "explorers": [
     {
       "name": "NETH Scan",
-      "url": "https://scan.chain.neth.network/",
+      "url": "https://scan.chain.neth.network",
       "standard": "none"
     }
   ]
